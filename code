@@ -1,0 +1,1741 @@
+#include "main.h"
+#include <stdint.h>
+
+/* ============================================================
+ * PERIPHERALS
+ * ============================================================ */
+
+I2C_HandleTypeDef hi2c1;
+RTC_HandleTypeDef hrtc;
+
+
+/* ============================================================
+ * PIN DEFINITIONS
+ * ============================================================ */
+
+#define BIG_BUTTON_PORT       GPIOA
+#define BIG_BUTTON_PIN        GPIO_PIN_0
+
+#define SMALL_BUTTON_PORT     GPIOA
+#define SMALL_BUTTON_PIN      GPIO_PIN_1
+
+#define MOTOR_PORT            GPIOA
+#define MOTOR_PIN             GPIO_PIN_4
+
+#define HT_DATA_PORT          GPIOA
+#define HT_DATA_PIN           GPIO_PIN_5
+
+#define HT_WR_PORT            GPIOA
+#define HT_WR_PIN             GPIO_PIN_6
+
+#define HT_CS_PORT            GPIOA
+#define HT_CS_PIN             GPIO_PIN_7
+
+
+/* ============================================================
+ * EEPROM
+ * ============================================================ */
+
+#define EEPROM_ADDRESS        (0x50 << 1)
+
+#define EEPROM_MAGIC_ADDR     0x00
+#define EEPROM_TALLY_L_ADDR   0x01
+#define EEPROM_TALLY_H_ADDR   0x02
+
+#define EEPROM_MAGIC           0xA5
+
+
+/* ============================================================
+ * BUTTON TIMING
+ * ============================================================ */
+
+#define DEBOUNCE_MS            30
+#define LONG_PRESS_MS          1000
+
+
+/* ============================================================
+ * DEVICE MODES
+ * ============================================================ */
+
+typedef enum
+{
+    MODE_TALLY = 0,
+    MODE_STOPWATCH,
+    MODE_TIMER,
+    MODE_CLOCK
+
+} DeviceMode;
+
+
+/* ============================================================
+ * GLOBAL VARIABLES
+ * ============================================================ */
+
+DeviceMode currentMode = MODE_TALLY;
+
+uint16_t tallyCount = 0;
+
+uint32_t stopwatchSeconds = 0;
+uint8_t stopwatchRunning = 0;
+
+uint32_t timerSeconds = 0;
+uint8_t timerRunning = 0;
+
+uint32_t lastTick = 0;
+
+uint8_t motorActive = 0;
+
+
+/* ============================================================
+ * 7 SEGMENT TABLE
+ * ============================================================ */
+
+const uint8_t sevenSegment[10] =
+{
+    0x3F,       // 0
+    0x06,       // 1
+    0x5B,       // 2
+    0x4F,       // 3
+    0x66,       // 4
+    0x6D,       // 5
+    0x7D,       // 6
+    0x07,       // 7
+    0x7F,       // 8
+    0x6F        // 9
+};
+
+
+/* ============================================================
+ * FUNCTION PROTOTYPES
+ * ============================================================ */
+
+void SystemClock_Config(void);
+
+static void MX_GPIO_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_RTC_Init(void);
+
+
+/* HT1621 */
+void HT1621_Init(void);
+void HT1621_Command(uint16_t command);
+void HT1621_WriteRAM(uint8_t address, uint8_t data);
+void HT1621_Clear(void);
+
+
+/* LCD */
+void LCD_Clear(void);
+void LCD_ShowNumber(uint16_t number);
+void LCD_ShowMMSS(uint32_t seconds);
+void LCD_ShowHHMM(uint8_t hour, uint8_t minute);
+void LCD_WriteDigit(uint8_t digit,
+                    uint8_t value,
+                    uint8_t colon);
+
+
+/* EEPROM */
+void EEPROM_SaveTally(uint16_t value);
+uint16_t EEPROM_LoadTally(void);
+
+
+/* Motor */
+void Motor_On(void);
+void Motor_Off(void);
+void Motor_Vibrate(uint32_t time_ms);
+
+
+/* Buttons */
+uint8_t ButtonIsPressed(GPIO_TypeDef *port,
+                        uint16_t pin);
+
+uint8_t ButtonWasShortPressed(GPIO_TypeDef *port,
+                              uint16_t pin);
+
+uint8_t ButtonWasLongPressed(GPIO_TypeDef *port,
+                             uint16_t pin);
+
+
+/* Modes */
+void RunTallyMode(void);
+void RunStopwatchMode(void);
+void RunTimerMode(void);
+void RunClockMode(void);
+
+
+/* ============================================================
+ * MAIN
+ * ============================================================ */
+
+int main(void)
+{
+    HAL_Init();
+
+    SystemClock_Config();
+
+    MX_GPIO_Init();
+
+    MX_I2C1_Init();
+
+    MX_RTC_Init();
+
+
+    /* Motor OFF */
+    Motor_Off();
+
+
+    /* Initialize HT1621 */
+    HT1621_Init();
+
+
+    /* Load saved tally */
+    tallyCount = EEPROM_LoadTally();
+
+
+    /* Initial display */
+    LCD_ShowNumber(tallyCount);
+
+
+    lastTick = HAL_GetTick();
+
+
+    while (1)
+    {
+        switch (currentMode)
+        {
+            case MODE_TALLY:
+
+                RunTallyMode();
+
+                break;
+
+
+            case MODE_STOPWATCH:
+
+                RunStopwatchMode();
+
+                break;
+
+
+            case MODE_TIMER:
+
+                RunTimerMode();
+
+                break;
+
+
+            case MODE_CLOCK:
+
+                RunClockMode();
+
+                break;
+
+
+            default:
+
+                currentMode = MODE_TALLY;
+
+                break;
+        }
+    }
+}
+
+
+/* ============================================================
+ * HT1621
+ * ============================================================ */
+
+/*
+ * Send one bit.
+ */
+
+static void HT1621_WriteBit(uint8_t bit)
+{
+    HAL_GPIO_WritePin(
+        HT_DATA_PORT,
+        HT_DATA_PIN,
+        bit ? GPIO_PIN_SET : GPIO_PIN_RESET
+    );
+
+    HAL_GPIO_WritePin(
+        HT_WR_PORT,
+        HT_WR_PIN,
+        GPIO_PIN_SET
+    );
+
+    HAL_GPIO_WritePin(
+        HT_WR_PORT,
+        HT_WR_PIN,
+        GPIO_PIN_RESET
+    );
+}
+
+
+/*
+ * Send multiple bits MSB first.
+ */
+
+static void HT1621_WriteBits(uint16_t data,
+                             uint8_t numberOfBits)
+{
+    for (int8_t i = numberOfBits - 1; i >= 0; i--)
+    {
+        HT1621_WriteBit(
+            (data >> i) & 0x01
+        );
+    }
+}
+
+
+/*
+ * HT1621 command.
+ *
+ * Command format:
+ *
+ * 100 + 8-bit command + don't care
+ */
+
+void HT1621_Command(uint16_t command)
+{
+    HAL_GPIO_WritePin(
+        HT_CS_PORT,
+        HT_CS_PIN,
+        GPIO_PIN_RESET
+    );
+
+
+    HT1621_WriteBits(
+        0b100,
+        3
+    );
+
+
+    HT1621_WriteBits(
+        command,
+        8
+    );
+
+
+    HT1621_WriteBit(0);
+
+
+    HAL_GPIO_WritePin(
+        HT_CS_PORT,
+        HT_CS_PIN,
+        GPIO_PIN_SET
+    );
+}
+
+
+/*
+ * Write HT1621 RAM.
+ *
+ * ID = 101
+ * Address = 6 bits
+ * Data = 4 bits
+ */
+
+void HT1621_WriteRAM(uint8_t address,
+                     uint8_t data)
+{
+    HAL_GPIO_WritePin(
+        HT_CS_PORT,
+        HT_CS_PIN,
+        GPIO_PIN_RESET
+    );
+
+
+    HT1621_WriteBits(
+        0b101,
+        3
+    );
+
+
+    HT1621_WriteBits(
+        address & 0x3F,
+        6
+    );
+
+
+    HT1621_WriteBits(
+        data & 0x0F,
+        4
+    );
+
+
+    HAL_GPIO_WritePin(
+        HT_CS_PORT,
+        HT_CS_PIN,
+        GPIO_PIN_SET
+    );
+}
+
+
+/*
+ * Initialize HT1621.
+ */
+
+void HT1621_Init(void)
+{
+    HAL_GPIO_WritePin(
+        HT_CS_PORT,
+        HT_CS_PIN,
+        GPIO_PIN_SET
+    );
+
+    HAL_GPIO_WritePin(
+        HT_WR_PORT,
+        HT_WR_PIN,
+        GPIO_PIN_SET
+    );
+
+
+    /*
+     * SYS EN
+     *
+     * 0000 0001
+     */
+
+    HT1621_Command(0x01);
+
+
+    /*
+     * RC 256 kHz
+     *
+     * 0001 10xx
+     *
+     * 0x18
+     */
+
+    HT1621_Command(0x18);
+
+
+    /*
+     * 1/3 bias + 4 commons
+     *
+     * 0010 10x1
+     *
+     * 0x29
+     */
+
+    HT1621_Command(0x29);
+
+
+    /*
+     * LCD ON
+     */
+
+    HT1621_Command(0x03);
+
+
+    HT1621_Clear();
+}
+
+
+/*
+ * Clear HT1621 RAM.
+ */
+
+void HT1621_Clear(void)
+{
+    for (uint8_t address = 0;
+         address < 32;
+         address++)
+    {
+        HT1621_WriteRAM(
+            address,
+            0x00
+        );
+    }
+}
+
+
+/* ============================================================
+ * LCD
+ * ============================================================ */
+
+void LCD_Clear(void)
+{
+    HT1621_Clear();
+}
+
+
+/*
+ * This routine assumes the LCD mapping:
+ *
+ * LCD:
+ *
+ * COM0 → HT1621 COM0
+ * COM1 → HT1621 COM1
+ * COM2 → HT1621 COM2
+ * COM3 → HT1621 COM3
+ *
+ * SEG0...SEG7 → LCD segment groups
+ *
+ * IMPORTANT:
+ * The exact segment orientation must be verified
+ * on the physical LCD datasheet.
+ */
+
+void LCD_WriteDigit(uint8_t digit,
+                    uint8_t value,
+                    uint8_t colon)
+{
+    if (digit > 3)
+        return;
+
+    if (value > 9)
+        return;
+
+
+    uint8_t pattern =
+        sevenSegment[value];
+
+
+    /*
+     * Two SEG addresses per digit.
+     */
+
+    uint8_t segA =
+        digit * 2;
+
+    uint8_t segB =
+        segA + 1;
+
+
+    uint8_t dataA = 0;
+    uint8_t dataB = 0;
+
+
+    /*
+     * Segment mapping:
+     *
+     * A
+     * ---
+     * F   B
+     * ---
+     * E   C
+     * ---
+     * D
+     *
+     * Pattern:
+     *
+     * bit0 = A
+     * bit1 = B
+     * bit2 = C
+     * bit3 = D
+     * bit4 = E
+     * bit5 = F
+     * bit6 = G
+     */
+
+    if (pattern & (1 << 3))
+        dataA |= (1 << 0);       // D
+
+    if (pattern & (1 << 4))
+        dataA |= (1 << 1);       // E
+
+    if (pattern & (1 << 6))
+        dataA |= (1 << 2);       // G
+
+    if (pattern & (1 << 5))
+        dataA |= (1 << 3);       // F
+
+
+    if (pattern & (1 << 2))
+        dataB |= (1 << 0);       // C
+
+    if (pattern & (1 << 1))
+        dataB |= (1 << 1);       // B
+
+    if (pattern & (1 << 0))
+        dataB |= (1 << 2);       // A
+
+
+    /*
+     * Colon / DP.
+     *
+     * Your LCD has DP positions.
+     *
+     * This may need to be changed after
+     * testing the exact LCD matrix.
+     */
+
+    if (colon)
+        dataB |= (1 << 3);
+
+
+    HT1621_WriteRAM(
+        segA,
+        dataA
+    );
+
+
+    HT1621_WriteRAM(
+        segB,
+        dataB
+    );
+}
+
+
+/*
+ * Show 0000-9999.
+ */
+
+void LCD_ShowNumber(uint16_t number)
+{
+    if (number > 9999)
+        number = 9999;
+
+
+    uint8_t d0 =
+        number / 1000;
+
+    uint8_t d1 =
+        (number / 100) % 10;
+
+    uint8_t d2 =
+        (number / 10) % 10;
+
+    uint8_t d3 =
+        number % 10;
+
+
+    LCD_WriteDigit(0, d0, 0);
+
+    LCD_WriteDigit(1, d1, 0);
+
+    LCD_WriteDigit(2, d2, 0);
+
+    LCD_WriteDigit(3, d3, 0);
+}
+
+
+/*
+ * Show MM:SS.
+ */
+
+void LCD_ShowMMSS(uint32_t seconds)
+{
+    uint8_t minutes =
+        seconds / 60;
+
+    uint8_t sec =
+        seconds % 60;
+
+
+    if (minutes > 99)
+        minutes = 99;
+
+
+    LCD_WriteDigit(
+        0,
+        minutes / 10,
+        0
+    );
+
+
+    LCD_WriteDigit(
+        1,
+        minutes % 10,
+        1
+    );
+
+
+    LCD_WriteDigit(
+        2,
+        sec / 10,
+        0
+    );
+
+
+    LCD_WriteDigit(
+        3,
+        sec % 10,
+        0
+    );
+}
+
+
+/*
+ * Show HH:MM.
+ */
+
+void LCD_ShowHHMM(uint8_t hour,
+                  uint8_t minute)
+{
+    LCD_WriteDigit(
+        0,
+        hour / 10,
+        0
+    );
+
+
+    LCD_WriteDigit(
+        1,
+        hour % 10,
+        1
+    );
+
+
+    LCD_WriteDigit(
+        2,
+        minute / 10,
+        0
+    );
+
+
+    LCD_WriteDigit(
+        3,
+        minute % 10,
+        0
+    );
+}
+
+
+/* ============================================================
+ * EEPROM
+ * ============================================================ */
+
+void EEPROM_SaveTally(uint16_t value)
+{
+    uint8_t data[3];
+
+
+    data[0] =
+        EEPROM_MAGIC;
+
+
+    data[1] =
+        value & 0xFF;
+
+
+    data[2] =
+        (value >> 8) & 0xFF;
+
+
+    HAL_I2C_Mem_Write(
+        &hi2c1,
+        EEPROM_ADDRESS,
+        EEPROM_MAGIC_ADDR,
+        I2C_MEMADD_SIZE_8BIT,
+        data,
+        3,
+        100
+    );
+
+
+    HAL_Delay(5);
+}
+
+
+/*
+ * Read tally.
+ */
+
+uint16_t EEPROM_LoadTally(void)
+{
+    uint8_t data[3];
+
+
+    if (HAL_I2C_Mem_Read(
+            &hi2c1,
+            EEPROM_ADDRESS,
+            EEPROM_MAGIC_ADDR,
+            I2C_MEMADD_SIZE_8BIT,
+            data,
+            3,
+            100) != HAL_OK)
+    {
+        return 0;
+    }
+
+
+    if (data[0] != EEPROM_MAGIC)
+        return 0;
+
+
+    uint16_t value;
+
+
+    value =
+        data[1];
+
+
+    value |=
+        ((uint16_t)data[2] << 8);
+
+
+    if (value > 9999)
+        value = 0;
+
+
+    return value;
+}
+
+
+/* ============================================================
+ * MOTOR
+ * ============================================================ */
+
+void Motor_On(void)
+{
+    HAL_GPIO_WritePin(
+        MOTOR_PORT,
+        MOTOR_PIN,
+        GPIO_PIN_SET
+    );
+
+    motorActive = 1;
+}
+
+
+void Motor_Off(void)
+{
+    HAL_GPIO_WritePin(
+        MOTOR_PORT,
+        MOTOR_PIN,
+        GPIO_PIN_RESET
+    );
+
+    motorActive = 0;
+}
+
+
+void Motor_Vibrate(uint32_t time_ms)
+{
+    Motor_On();
+
+    HAL_Delay(time_ms);
+
+    Motor_Off();
+}
+
+
+/* ============================================================
+ * BUTTON FUNCTIONS
+ * ============================================================ */
+
+uint8_t ButtonIsPressed(GPIO_TypeDef *port,
+                        uint16_t pin)
+{
+    return
+        (HAL_GPIO_ReadPin(
+            port,
+            pin
+        ) == GPIO_PIN_RESET);
+}
+
+
+/*
+ * Short press detection.
+ */
+
+uint8_t ButtonWasShortPressed(GPIO_TypeDef *port,
+                              uint16_t pin)
+{
+    if (!ButtonIsPressed(port, pin))
+        return 0;
+
+
+    HAL_Delay(DEBOUNCE_MS);
+
+
+    if (!ButtonIsPressed(port, pin))
+        return 0;
+
+
+    uint32_t start =
+        HAL_GetTick();
+
+
+    while (ButtonIsPressed(port, pin))
+    {
+        if ((HAL_GetTick() - start)
+             >= LONG_PRESS_MS)
+        {
+            return 0;
+        }
+
+        HAL_Delay(5);
+    }
+
+
+    HAL_Delay(DEBOUNCE_MS);
+
+
+    return 1;
+}
+
+
+/*
+ * Long press detection.
+ */
+
+uint8_t ButtonWasLongPressed(GPIO_TypeDef *port,
+                             uint16_t pin)
+{
+    if (!ButtonIsPressed(port, pin))
+        return 0;
+
+
+    HAL_Delay(DEBOUNCE_MS);
+
+
+    if (!ButtonIsPressed(port, pin))
+        return 0;
+
+
+    uint32_t start =
+        HAL_GetTick();
+
+
+    while (ButtonIsPressed(port, pin))
+    {
+        if ((HAL_GetTick() - start)
+             >= LONG_PRESS_MS)
+        {
+            /*
+             * Wait until button released.
+             */
+
+            while (ButtonIsPressed(port, pin))
+            {
+                HAL_Delay(5);
+            }
+
+            HAL_Delay(DEBOUNCE_MS);
+
+            return 1;
+        }
+
+        HAL_Delay(5);
+    }
+
+
+    return 0;
+}
+
+
+/* ============================================================
+ * TALLY MODE
+ * ============================================================ */
+
+void RunTallyMode(void)
+{
+    /*
+     * BIG SHORT
+     * Count +1
+     */
+
+    if (ButtonWasShortPressed(
+            BIG_BUTTON_PORT,
+            BIG_BUTTON_PIN))
+    {
+        tallyCount++;
+
+
+        if (tallyCount > 9999)
+            tallyCount = 0;
+
+
+        LCD_ShowNumber(
+            tallyCount
+        );
+
+
+        EEPROM_SaveTally(
+            tallyCount
+        );
+    }
+
+
+    /*
+     * SMALL LONG
+     * Tally → Stopwatch
+     */
+
+    if (ButtonWasLongPressed(
+            SMALL_BUTTON_PORT,
+            SMALL_BUTTON_PIN))
+    {
+        currentMode =
+            MODE_STOPWATCH;
+
+
+        stopwatchRunning = 0;
+
+        stopwatchSeconds = 0;
+
+        LCD_ShowMMSS(0);
+
+        lastTick =
+            HAL_GetTick();
+
+        return;
+    }
+
+
+    /*
+     * SMALL SHORT
+     * Reset tally
+     */
+
+    if (ButtonWasShortPressed(
+            SMALL_BUTTON_PORT,
+            SMALL_BUTTON_PIN))
+    {
+        tallyCount = 0;
+
+
+        LCD_ShowNumber(
+            tallyCount
+        );
+
+
+        EEPROM_SaveTally(
+            tallyCount
+        );
+    }
+}
+
+
+/* ============================================================
+ * STOPWATCH MODE
+ * ============================================================ */
+
+void RunStopwatchMode(void)
+{
+    /*
+     * BIG SHORT
+     * Start / Pause / Resume
+     */
+
+    if (ButtonWasShortPressed(
+            BIG_BUTTON_PORT,
+            BIG_BUTTON_PIN))
+    {
+        stopwatchRunning =
+            !stopwatchRunning;
+
+
+        lastTick =
+            HAL_GetTick();
+    }
+
+
+    /*
+     * SMALL LONG
+     * Stopwatch → Timer
+     */
+
+    if (ButtonWasLongPressed(
+            SMALL_BUTTON_PORT,
+            SMALL_BUTTON_PIN))
+    {
+        stopwatchRunning = 0;
+
+        timerRunning = 0;
+
+        timerSeconds = 0;
+
+        currentMode =
+            MODE_TIMER;
+
+
+        LCD_ShowMMSS(0);
+
+        return;
+    }
+
+
+    /*
+     * SMALL SHORT
+     * Reset stopwatch
+     */
+
+    if (ButtonWasShortPressed(
+            SMALL_BUTTON_PORT,
+            SMALL_BUTTON_PIN))
+    {
+        stopwatchRunning = 0;
+
+        stopwatchSeconds = 0;
+
+
+        LCD_ShowMMSS(0);
+
+        return;
+    }
+
+
+    /*
+     * Stopwatch timing
+     */
+
+    if (stopwatchRunning)
+    {
+        uint32_t now =
+            HAL_GetTick();
+
+
+        if ((now - lastTick) >= 1000)
+        {
+            uint32_t elapsed =
+                (now - lastTick) / 1000;
+
+
+            lastTick +=
+                elapsed * 1000;
+
+
+            stopwatchSeconds +=
+                elapsed;
+
+
+            /*
+             * 99:59 maximum
+             */
+
+            if (stopwatchSeconds >= 6000)
+            {
+                stopwatchSeconds = 0;
+            }
+
+
+            LCD_ShowMMSS(
+                stopwatchSeconds
+            );
+        }
+    }
+}
+
+
+/* ============================================================
+ * TIMER MODE
+ * ============================================================ */
+
+void RunTimerMode(void)
+{
+    /*
+     * SETTING MODE
+     */
+
+    if (!timerRunning)
+    {
+        /*
+         * BIG SHORT
+         * +1 minute
+         */
+
+        if (ButtonWasShortPressed(
+                BIG_BUTTON_PORT,
+                BIG_BUTTON_PIN))
+        {
+            timerSeconds += 60;
+
+
+            if (timerSeconds > 99 * 60)
+                timerSeconds = 0;
+
+
+            LCD_ShowMMSS(
+                timerSeconds
+            );
+        }
+
+
+        /*
+         * SMALL LONG
+         * Timer → Clock
+         */
+
+        if (ButtonWasLongPressed(
+                SMALL_BUTTON_PORT,
+                SMALL_BUTTON_PIN))
+        {
+            currentMode =
+                MODE_CLOCK;
+
+
+            return;
+        }
+
+
+        /*
+         * SMALL SHORT
+         * Start timer
+         */
+
+        if (ButtonWasShortPressed(
+                SMALL_BUTTON_PORT,
+                SMALL_BUTTON_PIN))
+        {
+            if (timerSeconds > 0)
+            {
+                timerRunning = 1;
+
+                lastTick =
+                    HAL_GetTick();
+            }
+        }
+    }
+
+
+    /*
+     * TIMER RUNNING
+     */
+
+    else
+    {
+        /*
+         * BIG SHORT
+         * Pause
+         */
+
+        if (ButtonWasShortPressed(
+                BIG_BUTTON_PORT,
+                BIG_BUTTON_PIN))
+        {
+            timerRunning = 0;
+
+            return;
+        }
+
+
+        /*
+         * SMALL SHORT
+         * Reset
+         */
+
+        if (ButtonWasShortPressed(
+                SMALL_BUTTON_PORT,
+                SMALL_BUTTON_PIN))
+        {
+            timerRunning = 0;
+
+            timerSeconds = 0;
+
+            LCD_ShowMMSS(0);
+
+            return;
+        }
+
+
+        /*
+         * Countdown
+         */
+
+        uint32_t now =
+            HAL_GetTick();
+
+
+        if ((now - lastTick) >= 1000)
+        {
+            uint32_t elapsed =
+                (now - lastTick) / 1000;
+
+
+            lastTick +=
+                elapsed * 1000;
+
+
+            if (timerSeconds > elapsed)
+            {
+                timerSeconds -= elapsed;
+            }
+            else
+            {
+                timerSeconds = 0;
+            }
+
+
+            LCD_ShowMMSS(
+                timerSeconds
+            );
+
+
+            /*
+             * Timer finished
+             */
+
+            if (timerSeconds == 0)
+            {
+                timerRunning = 0;
+
+
+                /*
+                 * Silent vibration alert
+                 */
+
+                Motor_Vibrate(1000);
+            }
+        }
+    }
+}
+
+
+/* ============================================================
+ * CLOCK MODE
+ * ============================================================ */
+
+void RunClockMode(void)
+{
+    RTC_TimeTypeDef currentTime;
+
+
+    /*
+     * Read RTC time
+     */
+
+    HAL_RTC_GetTime(
+        &hrtc,
+        &currentTime,
+        RTC_FORMAT_BIN
+    );
+
+
+    /*
+     * Read date after time.
+     *
+     * Required by STM32 RTC HAL
+     */
+
+    RTC_DateTypeDef currentDate;
+
+    HAL_RTC_GetDate(
+        &hrtc,
+        &currentDate,
+        RTC_FORMAT_BIN
+    );
+
+
+    /*
+     * Display HH:MM
+     */
+
+    LCD_ShowHHMM(
+        currentTime.Hours,
+        currentTime.Minutes
+    );
+
+
+    /*
+     * SMALL LONG
+     *
+     * Clock → Tally
+     */
+
+    if (ButtonWasLongPressed(
+            SMALL_BUTTON_PORT,
+            SMALL_BUTTON_PIN))
+    {
+        currentMode =
+            MODE_TALLY;
+
+
+        LCD_ShowNumber(
+            tallyCount
+        );
+    }
+}
+
+
+/* ============================================================
+ * GPIO INITIALIZATION
+ * ============================================================ */
+
+static void MX_GPIO_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+
+    /*
+     * BIG BUTTON
+     *
+     * Active LOW
+     */
+
+    GPIO_InitStruct.Pin =
+        BIG_BUTTON_PIN;
+
+    GPIO_InitStruct.Mode =
+        GPIO_MODE_INPUT;
+
+    GPIO_InitStruct.Pull =
+        GPIO_PULLUP;
+
+    GPIO_InitStruct.Speed =
+        GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(
+        BIG_BUTTON_PORT,
+        &GPIO_InitStruct
+    );
+
+
+    /*
+     * SMALL BUTTON
+     */
+
+    GPIO_InitStruct.Pin =
+        SMALL_BUTTON_PIN;
+
+    HAL_GPIO_Init(
+        SMALL_BUTTON_PORT,
+        &GPIO_InitStruct
+    );
+
+
+    /*
+     * MOTOR
+     */
+
+    GPIO_InitStruct.Pin =
+        MOTOR_PIN;
+
+    GPIO_InitStruct.Mode =
+        GPIO_MODE_OUTPUT_PP;
+
+    GPIO_InitStruct.Pull =
+        GPIO_NOPULL;
+
+    GPIO_InitStruct.Speed =
+        GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(
+        MOTOR_PORT,
+        &GPIO_InitStruct
+    );
+
+
+    /*
+     * HT1621 DATA
+     */
+
+    GPIO_InitStruct.Pin =
+        HT_DATA_PIN;
+
+    HAL_GPIO_Init(
+        HT_DATA_PORT,
+        &GPIO_InitStruct
+    );
+
+
+    /*
+     * HT1621 WR
+     */
+
+    GPIO_InitStruct.Pin =
+        HT_WR_PIN;
+
+    HAL_GPIO_Init(
+        HT_WR_PORT,
+        &GPIO_InitStruct
+    );
+
+
+    /*
+     * HT1621 CS
+     */
+
+    GPIO_InitStruct.Pin =
+        HT_CS_PIN;
+
+    HAL_GPIO_Init(
+        HT_CS_PORT,
+        &GPIO_InitStruct
+    );
+
+
+    /*
+     * Initial outputs
+     */
+
+    HAL_GPIO_WritePin(
+        MOTOR_PORT,
+        MOTOR_PIN,
+        GPIO_PIN_RESET
+    );
+
+
+    HAL_GPIO_WritePin(
+        HT_CS_PORT,
+        HT_CS_PIN,
+        GPIO_PIN_SET
+    );
+
+
+    HAL_GPIO_WritePin(
+        HT_WR_PORT,
+        HT_WR_PIN,
+        GPIO_PIN_SET
+    );
+
+
+    HAL_GPIO_WritePin(
+        HT_DATA_PORT,
+        HT_DATA_PIN,
+        GPIO_PIN_RESET
+    );
+}
+
+
+/* ============================================================
+ * I2C1
+ * ============================================================ */
+
+static void MX_I2C1_Init(void)
+{
+    hi2c1.Instance =
+        I2C1;
+
+    hi2c1.Init.Timing =
+        0x00303D5B;
+
+    hi2c1.Init.OwnAddress1 =
+        0;
+
+    hi2c1.Init.AddressingMode =
+        I2C_ADDRESSINGMODE_7BIT;
+
+    hi2c1.Init.DualAddressMode =
+        I2C_DUALADDRESS_DISABLE;
+
+    hi2c1.Init.OwnAddress2 =
+        0;
+
+    hi2c1.Init.OwnAddress2Masks =
+        I2C_OA2_NOMASK;
+
+    hi2c1.Init.GeneralCallMode =
+        I2C_GENERALCALL_DISABLE;
+
+    hi2c1.Init.NoStretchMode =
+        I2C_NOSTRETCH_DISABLE;
+
+
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+
+    if (HAL_I2CEx_ConfigAnalogFilter(
+            &hi2c1,
+            I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+
+    if (HAL_I2CEx_ConfigDigitalFilter(
+            &hi2c1,
+            0) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+
+/* ============================================================
+ * RTC
+ * ============================================================ */
+
+static void MX_RTC_Init(void)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};
+
+
+    hrtc.Instance =
+        RTC;
+
+
+    hrtc.Init.HourFormat =
+        RTC_HOURFORMAT_24;
+
+
+    hrtc.Init.AsynchPrediv =
+        127;
+
+
+    hrtc.Init.SynchPrediv =
+        255;
+
+
+    hrtc.Init.OutPut =
+        RTC_OUTPUT_DISABLE;
+
+
+    hrtc.Init.OutPutRemap =
+        RTC_OUTPUT_REMAP_NONE;
+
+
+    hrtc.Init.OutPutPolarity =
+        RTC_OUTPUT_POLARITY_HIGH;
+
+
+    hrtc.Init.OutPutType =
+        RTC_OUTPUT_TYPE_OPENDRAIN;
+
+
+    if (HAL_RTC_Init(&hrtc) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+
+    /*
+     * IMPORTANT:
+     *
+     * Do not reset the time every boot.
+     *
+     * These values are only an example
+     * for first programming.
+     */
+
+    if (HAL_RTCEx_BKUPRead(
+            &hrtc,
+            RTC_BKP_DR0) != 0xA5A5)
+    {
+        sTime.Hours =
+            10;
+
+        sTime.Minutes =
+            30;
+
+        sTime.Seconds =
+            0;
+
+
+        HAL_RTC_SetTime(
+            &hrtc,
+            &sTime,
+            RTC_FORMAT_BIN
+        );
+
+
+        sDate.WeekDay =
+            RTC_WEEKDAY_WEDNESDAY;
+
+        sDate.Month =
+            RTC_MONTH_OCTOBER;
+
+        sDate.Date =
+            7;
+
+        sDate.Year =
+            26;
+
+
+        HAL_RTC_SetDate(
+            &hrtc,
+            &sDate,
+            RTC_FORMAT_BIN
+        );
+
+
+        HAL_RTCEx_BKUPWrite(
+            &hrtc,
+            RTC_BKP_DR0,
+            0xA5A5
+        );
+    }
+}
+
+
+/* ============================================================
+ * SYSTEM CLOCK
+ * ============================================================ */
+
+void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct =
+        {0};
+
+    RCC_ClkInitTypeDef RCC_ClkInitStruct =
+        {0};
+
+
+    /*
+     * HSI16
+     */
+
+    RCC_OscInitStruct.OscillatorType =
+        RCC_OSCILLATORTYPE_HSI |
+        RCC_OSCILLATORTYPE_LSE;
+
+
+    RCC_OscInitStruct.HSIState =
+        RCC_HSI_ON;
+
+
+    RCC_OscInitStruct.HSIDiv =
+        RCC_HSI_DIV1;
+
+
+    RCC_OscInitStruct.HSICalibrationValue =
+        RCC_HSICALIBRATION_DEFAULT;
+
+
+    RCC_OscInitStruct.LSEState =
+        RCC_LSE_ON;
+
+
+    if (HAL_RCC_OscConfig(
+            &RCC_OscInitStruct) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+
+    /*
+     * HSI16 = SYSCLK
+     */
+
+    RCC_ClkInitStruct.ClockType =
+        RCC_CLOCKTYPE_HCLK |
+        RCC_CLOCKTYPE_SYSCLK |
+        RCC_CLOCKTYPE_PCLK1;
+
+
+    RCC_ClkInitStruct.SYSCLKSource =
+        RCC_SYSCLKSOURCE_HSI;
+
+
+    RCC_ClkInitStruct.AHBCLKDivider =
+        RCC_SYSCLK_DIV1;
+
+
+    RCC_ClkInitStruct.APB1CLKDivider =
+        RCC_HCLK_DIV1;
+
+
+    if (HAL_RCC_ClockConfig(
+            &RCC_ClkInitStruct,
+            FLASH_LATENCY_0) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+
+/* ============================================================
+ * ERROR HANDLER
+ * ============================================================ */
+
+void Error_Handler(void)
+{
+    __disable_irq();
+
+    while (1)
+    {
+        /*
+         * Stay here if initialization fails.
+         */
+    }
+}
