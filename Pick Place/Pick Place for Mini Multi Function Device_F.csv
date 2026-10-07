@@ -1,0 +1,45 @@
+﻿Altium Designer Pick and Place Locations
+C:\Program Files\Altium\Projects\Mini Multi Function Device\Project Outputs for Mini Multi Function Device\Pick Place\Pick Place for Mini Multi Function Device_F.csv
+
+========================================================================================================================
+File Design Information:
+
+Date:       21-09-26
+Time:       13:24
+Revision:   Not in VersionControl
+Variant:    No variations
+Units used: mil
+
+﻿"Designator","Comment","Layer","Footprint","Center-X(mil)","Center-Y(mil)","Rotation","Description"
+"BT1","Vin","BottomLayer","FP-3034-MFG","23.622mil","353.150mil","0","Retainer 1 Button cell Ø20.0mm 2020，2025，2032 PCBinstall，SMD mount 4.06mm(height)"
+"Y1","CRYSTAL","TopLayer","OSC-SMD_L3.2-W1.5","-307.087mil","610.236mil","270","-40℃~+85℃ 12.5pF 32.768kHz 70kΩ SMD crystal oscillator ±20ppm ±30ppm SMD3215-2P Crystals ROHS"
+"U4","HT1621B-JSM","BottomLayer","HT1621B-JSM","-47.931mil","923.983mil","180","-25℃~+75℃ 0.1uA 1/3,1/2 1/4,1/3,1/2 2.4V~5.2V 256kHz 3-Wire Serial Interface 32 Segment 32x4 bit 60uA Built-in oscillator SSOP-48 LCD Drivers ROHS"
+"U3","STM32G030F6P6","TopLayer","FP-TSSOP20-YA-MFG","27.559mil","527.559mil","0","Microcontroller 32-bit ARM Cortex-M0+ RISC 32KB Flash 3.3V 20-Pin TSSOP Tray"
+"U2","TPS610994YFFR","TopLayer","BGA6N40P3X2_122X88X62N","-303.150mil","480.315mil","0","0.7Vin Synchronous Boost Converter with 800 nA Ultra-Low Quiescent Current 6-DSBGA -40 to 85"
+"U1","EEPROM","TopLayer","AT24C02C-STUM-TQN","289.406mil","520.621mil","180","SOT-23-5 EEPROM ROHS"
+"SW2","GT-TC074A-H100-L1","TopLayer","SW-SMD_4P-L4.5-W4.5-P3.00-LS7.5","338.583mil","181.102mil","90","-30℃~+85℃ 1.6N 100,000 cycles 10mm 12V 4.5mm 4.5mm 50mA Black No Round Button SMD(SMT) Tab SPST Surface Mount,Vertical Without Bracket SMD-4P,4.5x4.5mm Tactile Switches ROHS"
+"SW1","GT-TC089A-H100-L1","TopLayer","SW-SMD_4P-L6.0-W6.0-P4.50-LS8.5","27.559mil","188.976mil","0","-30℃~+85℃ 1.6N 100,000 cycles 10mm 12V 50mA 6mm 6mm Black No Round Button SMD(SMT) Tab SPST Surface Mount,Vertical Without Bracket SMD-4P,6x6mm Tactile Switches ROHS"
+"R5","100kΩ","BottomLayer","RESISTOR","488.189mil","885.827mil","270","62.5mW Thick Film Resistors 50V ±100ppm/℃ ±5% 100kΩ 0402 Chip Resistor - Surface Mount ROHS"
+"R4","100 Ω","BottomLayer","RESISTOR","488.189mil","803.150mil","90","Res Thick Film 0402 100 Ohm 5% 0.063W(1/16W) ±100ppm/C Pad SMD T/R Automotive AEC-Q200"
+"R3","20kΩ","TopLayer","RESISTOR","-11.811mil","681.102mil","180","-55℃~+155℃ 20kΩ 25V 62.5mW Thin Film Resistor ±0.5% ±50ppm/℃ 0402 Chip Resistor - Surface Mount ROHS"
+"R2","4.7kΩ","TopLayer","RESISTOR","-94.488mil","708.661mil","270","-55℃~+125℃ 30V 4.7kΩ 62.5mW ±5% ±50ppm/℃ 0402 Chip Resistor - Surface Mount ROHS"
+"R1","4.7kΩ","TopLayer","RESISTOR","263.779mil","633.858mil","180","-55℃~+125℃ 30V 4.7kΩ 62.5mW ±5% ±50ppm/℃ 0402 Chip Resistor - Surface Mount ROHS"
+"Q1","AO3400A","BottomLayer","FP-SOT23-MFG","385.827mil","850.394mil","180","Trans MOSFET N-CH 30V 5.7A 3-Pin SOT-23"
+"M1","MOTOR","BottomLayer","VCLP1020B002L","421.988mil","1109.000mil","0","Vibration Coin 3V Low Curr 0.75G"
+"L1","2.2uH","TopLayer","INDC2520X100N","-303.150mil","366.142mil","180","Inductor Power Chip Shielded Multi-Layer 2.2uH 20% 1MHz Ferrite 1.3A 0.1Ohm DCR 1008 T/R"
+"J1","SWD","BottomLayer","SWD_HEADER","-413.386mil","928.884mil","270",""
+"DS1","LCD-S401M16KR","TopLayer","LCD-S401M16KR","41.378mil","1187.205mil","0","LCD Numeric Display Modules 4 Digit 0.17 7 Seg Reflective"
+"D1","BAT54","BottomLayer","SOT95P240X120-3N","358.268mil","992.126mil","180","Diode Schottky 30V 0.2A Automotive 3-Pin SOT-23"
+"Cin1","10uF","TopLayer","CAPACITOR_0805","-393.701mil","582.677mil","270","10V 10uF X5R ±10% 0805 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C12","100nF","TopLayer","CAPACITOR","54.000mil","379.000mil","0","FCC0402B104K160AT 100nF ±10% 16V Ceramic Capacitor X7R 0402 Ceramic Capacitors  100nF   16V 10%"
+"C11","100nF","TopLayer","CAPACITOR","0.000mil","342.520mil","0","FCC0402B104K160AT 100nF ±10% 16V Ceramic Capacitor X7R 0402 Ceramic Capacitors  100nF   16V 10%"
+"C10","1uF","TopLayer","CAPACITOR","-19.685mil","728.346mil","180","16V 1uF X5R 卤10% 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C9","100nF","TopLayer","CAPACITOR","-212.598mil","665.354mil","90","Ceramic Capacitor, Ceramic, 10V, 5% +Tol, 5% -Tol, X5R, 15% TC, 0.1uF, Surface Mount, 0402"
+"C8","1uF","TopLayer","CAPACITOR","-157.480mil","673.228mil","180","16V 1uF X5R 卤10% 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C7","5.6pF","TopLayer","CAPACITOR","-212.598mil","586.614mil","0","10V 5.6pF C0G 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C6","5.6pF","TopLayer","CAPACITOR","-157.480mil","614.173mil","270","10V 5.6pF C0G 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C5","100nF","TopLayer","CAPACITOR","-146.000mil","476.000mil","90","Ceramic Capacitor, Ceramic, 10V, 5% +Tol, 5% -Tol, X5R, 15% TC, 0.1uF, Surface Mount, 0402"
+"C4","100nF","TopLayer","CAPACITOR","-228.346mil","519.685mil","90","FCC0402B104K160AT 100nF ±10% 16V Ceramic Capacitor X7R 0402 Ceramic Capacitors  100nF   16V 10%"
+"C3","1uF","TopLayer","CAPACITOR","-188.976mil","519.685mil","90","16V 1uF X5R 卤10% 0402 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C2","22uF","TopLayer","CAPACITOR_0805","-169.000mil","381.000mil","90","22uF 6.3V X5R ±20% 0805 Multilayer Ceramic Capacitors MLCC - SMD/SMT ROHS"
+"C1","100nF","TopLayer","CAPACITOR","342.520mil","633.858mil","180","Ceramic Capacitor, Ceramic, 10V, 5% +Tol, 5% -Tol, X5R, 15% TC, 0.1uF, Surface Mount, 0402"
